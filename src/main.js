@@ -1,7 +1,3 @@
-import { encode } from '@jsquash/avif';
-import JSZip from 'jszip';
-import tippy from 'tippy.js';
-import 'tippy.js/dist/tippy.css';
 import './style.css';
 
 const dropzone = document.getElementById('dropzone');
@@ -9,8 +5,7 @@ const fileInput = document.getElementById('file-input');
 const tableBody = document.querySelector('#results-table tbody');
 const downloadAllBtn = document.getElementById('download-all');
 
-const zip = new JSZip();
-let zipFiles = [];
+let processedFiles = [];
 
 fileInput.addEventListener('change', e => {
     console.log('Files selected via input:', e.target.files);
@@ -84,68 +79,108 @@ async function processNext() {
 }
 
 async function processFile(file, row) {
-    function getUniqueName(baseName, extension, existingNames) {
-        let name = `${baseName}.${extension}`;
-        let count = 1;
-        while (existingNames.has(name)) {
-            name = `${baseName}_${count}.${extension}`;
-            count++;
-        }
-        existingNames.add(name);
-        return name;
+    try {
+        // Convert SVG to PNG first if needed
+        const imageBlob = file.type === 'image/svg+xml' 
+            ? await svgToPngFile(await file.text(), file.name)
+            : file;
+
+        // Process image through canvas
+        const { blob: processedBlob } = await processImageThroughCanvas(imageBlob);
+        
+        // Convert to ArrayBuffer for binary transfer
+        const arrayBuffer = await processedBlob.arrayBuffer();
+        
+        // Call Netlify function with binary data
+        const response = await fetch('/.netlify/functions/optimise', {
+            method: 'POST',
+            body: arrayBuffer,
+            headers: {
+                'Content-Type': 'application/octet-stream'
+            }
+        });
+
+        if (!response.ok) throw new Error('API request failed');
+        
+        const resultBlob = await response.blob();
+        const finalFile = new File(
+            [resultBlob], 
+            `opt_${file.name.replace(/\.[^/.]+$/, '')}.avif`,
+            { type: 'image/avif' }
+        );
+
+        // Update UI
+        const reducedPercent = ((1 - (resultBlob.size / file.size)) * 100).toFixed(0);
+        row.querySelector('.opt-size').textContent = 
+            `${formatBytes(resultBlob.size)} (${reducedPercent}%)`;
+
+        const link = document.createElement('a');
+        link.textContent = 'Download';
+        link.href = URL.createObjectURL(finalFile);
+        link.download = finalFile.name;
+        row.querySelector('.dl-cell').appendChild(link);
+
+        // Add to processed files for batch download
+        processedFiles.push(finalFile);
+        downloadAllBtn.disabled = false;
+        
+    } catch (error) {
+        console.error('Error processing file:', error);
+        row.querySelector('.opt-size').textContent = '❌ Error';
+        throw error;
     }
+}
 
-    const baseName = `opt_${file.name.replace(/\.\w+$/, '')}`;
-    const outputName = getUniqueName(baseName, 'avif', new Set(zipFiles.map(f => f.name)));
-
-    const isSVG = file.type === 'image/svg+xml';
-
-    const inputBlob = isSVG
-        ? await svgToPngFile(await file.text(), file.name)
-        : file;
-
-    // Normalize and resize through canvas
-    const imageData = await imageToImageData(inputBlob, 2000);
-    const hasAlpha = imageHasAlpha(imageData);
-    const finalImageData = hasAlpha
-        ? imageData
-        : await imageToImageData(inputBlob, 2000, true); // Flatten if opaque
-
-    // First pass at quality 70
-    let quality = 70;
-    let buffer = await encode(finalImageData, { quality });
-    let avifBlob = new Blob([buffer], { type: 'image/avif' });
-
-    const originalSize = file.size;
-    const reduction = 1 - (avifBlob.size / originalSize);
-
-    if (reduction < 0.3) {
-        // Re-encode at a reduced quality based on how bad the compression was
-        const adjustedQuality = Math.max(40, Math.round(quality * reduction));
-        const newBuffer = await encode(finalImageData, { quality: adjustedQuality });
-        const newBlob = new Blob([newBuffer], { type: 'image/avif' });
-
-        // Keep smaller result
-        if (newBlob.size < avifBlob.size) {
-            avifBlob = newBlob;
-            quality = adjustedQuality;
-        }
+async function processImageThroughCanvas(blob) {
+    const img = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Calculate dimensions to fit within 2000x2000 while maintaining aspect ratio
+    const maxSize = 2000;
+    let width = img.width;
+    let height = img.height;
+    
+    if (width > height && width > maxSize) {
+        height = Math.round((height * maxSize) / width);
+        width = maxSize;
+    } else if (height > maxSize) {
+        width = Math.round((width * maxSize) / height);
+        height = maxSize;
     }
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+    // Draw image on canvas
+    ctx.drawImage(img, 0, 0, width, height);
+    
+    // Check for transparency
+    const hasAlpha = imageHasAlpha(ctx.getImageData(0, 0, width, height));
+    
+    // Convert to blob with appropriate format
+    const outputBlob = await new Promise(resolve => {
+        canvas.toBlob(blob => resolve(blob), 
+            hasAlpha ? 'image/png' : 'image/jpeg', 0.9);
+    });
+    
+    return { blob: outputBlob };
+}
 
-    const finalFile = new File([avifBlob], outputName, { type: 'image/avif' });
-    zip.file(outputName, avifBlob);
-    zipFiles.push(finalFile);
+function imageHasAlpha(imageData) {
+    const data = imageData.data;
+    for (let i = 3; i < data.length; i += 4) {
+        if (data[i] < 255) return true;
+    }
+    return false;
+}
 
-    const reducedPercent = ((1 - (avifBlob.size / file.size)) * 100).toFixed(0);
-    row.querySelector('.opt-size').textContent = `${formatBytes(avifBlob.size)} (${reducedPercent}%)`;
-
-    const link = document.createElement('a');
-    link.textContent = 'Download';
-    link.href = URL.createObjectURL(finalFile);
-    link.download = finalFile.name;
-    row.querySelector('.dl-cell').appendChild(link);
-
-    downloadAllBtn.disabled = false;
+function blobToBase64(blob) {
+    return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.readAsDataURL(blob);
+    });
 }
 
 async function svgToPngFile(svgText, name) {
@@ -169,34 +204,6 @@ async function svgToPngFile(svgText, name) {
     });
 }
 
-async function imageToImageData(file, maxSize, forceOpaque = false) {
-    const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
-    const width = Math.floor(bitmap.width * scale);
-    const height = Math.floor(bitmap.height * scale);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-
-    if (forceOpaque) {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, width, height);
-    }
-
-    ctx.drawImage(bitmap, 0, 0, width, height);
-    return ctx.getImageData(0, 0, width, height);
-}
-
-function imageHasAlpha(imageData) {
-    const data = imageData.data;
-    for (let i = 3; i < data.length; i += 4) {
-        if (data[i] < 255) return true;
-    }
-    return false;
-}
-
 function formatBytes(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -204,16 +211,45 @@ function formatBytes(bytes) {
 }
 
 downloadAllBtn.addEventListener('click', async () => {
-    const blob = await zip.generateAsync({ type: 'blob' });
+    if (processedFiles.length === 0) return;
+    
+    // Create a new zip file
+    const zipResponse = await fetch('https://stuk.github.io/jszip/dist/jszip.min.js');
+    const zipScript = await zipResponse.text();
+    const scriptEl = document.createElement('script');
+    scriptEl.textContent = zipScript;
+    document.body.appendChild(scriptEl);
+    
+    // Wait for JSZip to be available
+    await new Promise(resolve => {
+        const check = () => {
+            if (window.JSZip) return resolve();
+            setTimeout(check, 50);
+        };
+        check();
+    });
+    
+    const zip = new JSZip();
+    
+    // Add all processed files to the zip
+    for (const file of processedFiles) {
+        zip.file(file.name, file);
+    }
+    
+    // Generate the zip file
+    const content = await zip.generateAsync({ type: 'blob' });
+    const url = URL.createObjectURL(content);
+    
+    // Create and trigger download
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'optimised_images.zip';
+    a.href = url;
+    a.download = 'optimized-images.zip';
+    document.body.appendChild(a);
     a.click();
-});
-
-tippy('#how-to-use', {
-    allowHTML: true,
-    placement: 'top',
-    maxWidth: 300,
-    theme: 'light-border',
+    
+    // Clean up
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100);
 });

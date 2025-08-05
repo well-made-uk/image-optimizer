@@ -17,6 +17,7 @@
   "dependencies": {
     "@jsquash/avif": "^2.1.1",
     "jszip": "^3.10.1",
+    "sharp": "^0.34.3",
     "tippy.js": "^6.3.7",
     "wellmade-tailwind-preset": "^1.1.2"
   }
