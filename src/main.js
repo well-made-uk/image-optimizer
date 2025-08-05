@@ -105,7 +105,7 @@ async function processFile(file, row) {
         const resultBlob = await response.blob();
         const finalFile = new File(
             [resultBlob], 
-            `opt_${file.name.replace(/\.[^/.]+$/, '')}.avif`,
+            `x-${file.name.replace(/\.[^/.]+$/, '')}.avif`,
             { type: 'image/avif' }
         );
 
