@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Image Optimiser</title>
+    <link rel="stylesheet" href="/src/style.css" />
+    <script type="module" src="/src/main.js"></script>
+</head> <body class="font-sans text-base text-gray-800 bg-gray-50">
+            <a href="#main-content"
+                class="sr-only focus:not-sr-only absolute left-2 top-2 bg-white text-primary px-3 py-1 rounded z-50">
+                Skip to main content
+            </a>
+        
+            <div id="root" class="max-w-3xl mx-auto px-4 py-6">
+                <header class="mb-8 text-gray-600" role="banner">
+                    <h1 class="text-lg font-bold mb-0">Well-made Image Optimiser</h1>
+                    <h2>How to use</h2>
+                    <p>
+                        Add images to match my image compression standards. This tool compresses most image files and converts to the modern standard .AVIF format.
+                    </p>
+                    <h2>Tips</h2>
+                    <ul class="list-disc pl-5">
+                        <li>This tool does not intelligently resize images. It is best practice to use images that are 1-2x the maximum size you expect to display them at.</li>
+                        <li>If your images will be displayed on a white background, you should pre-convert them to JPEG before uploading (as transparency is not required).</li>
+                        <li>Optimised images begin with "x-" or "opt_" in their filename. You can use this to check if any of the files on your website are not yet optimised.</li>
+                    </ul>
+                </header>
+        
+                <main id="main-content" role="main">
+                    <div class="mb-6 flex justify-between items-center">
+                        <label for="file-input" class="btn btn-solid cursor-pointer">Choose Images</label>
+                        <button id="download-all" class="btn btn-outline" disabled>Download All</button>
+                    </div>
+        
+                    <div id="dropzone"
+                        class="border-2 border-dashed border-gray-300 rounded p-6 text-center text-sm text-gray-500 bg-white mb-6 hover:border-primary focus:outline-none">
+                        Drag & drop files here
+                        <input id="file-input" type="file" class="sr-only" accept="image/*" multiple />
+                    </div>
+        
+                    <table id="results-table" class="section table-auto w-full text-sm border-separate border-spacing-y-2">
+                        <thead>
+                            <tr class="text-left">
+                                <th>Preview</th>
+                                <th>File</th>
+                                <th>Original</th>
+                                <th>Optimised</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody class="align-top">
+                            <!-- Rows will be injected here -->
+                        </tbody>
+                    </table>
+                </main>
+            </div>
+        </body>
+
+
+</html>

@@ -1,0 +1,107 @@
+@import "wellmade-tailwind-preset/index.css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.container {
+  max-width: 800px;
+  margin: auto;
+}
+
+h1 {
+  text-align: center;
+}
+
+.dropzone {
+  border: 2px dashed #ccc;
+  background: white;
+  padding: 2rem;
+  text-align: center;
+  margin-bottom: 2rem;
+  cursor: pointer;
+  border-radius: 10px;
+}
+
+.dropzone.dragover {
+  border-color: #007bff;
+  background-color: #e9f5ff;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  margin-bottom: 1rem;
+}
+
+th, td {
+  padding: 0.75rem;
+  border: 1px solid #ddd;
+  text-align: left;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  background: #007bff;
+  border: none;
+  color: white;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+table td:first-child {
+  width: 48px;
+}
+
+button:disabled {
+  background: #aaa;
+  cursor: not-allowed;
+}
+
+.how-to-tip {
+  cursor: help;
+  font-size: 0.9rem;
+  color: #444;
+  text-decoration: underline dotted;
+}
+
+@media (max-width: 600px) {
+  #results-table {
+    font-size: 14px;
+  }
+
+  #results-table thead {
+    display: none;
+  }
+
+  #results-table tr {
+    display: block;
+    margin-bottom: 1rem;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  #results-table td {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 12px;
+    border-bottom: 1px solid #eee;
+  }
+
+  #results-table td::before {
+    content: attr(data-label);
+    font-weight: bold;
+    margin-right: 1rem;
+    flex: 1;
+  }
+
+  #results-table td:last-child {
+    border-bottom: none;
+  }
+
+  #results-table img {
+    width: 32px;
+    height: 32px;
+  }
+}

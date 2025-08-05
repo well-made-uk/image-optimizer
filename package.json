@@ -1,0 +1,23 @@
+{
+  "name": "image-optimizer",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.1",
+    "vite": "^7.0.4"
+  },
+  "dependencies": {
+    "@jsquash/avif": "^2.1.1",
+    "jszip": "^3.10.1",
+    "tippy.js": "^6.3.7",
+    "wellmade-tailwind-preset": "^1.1.2"
+  }
+}
