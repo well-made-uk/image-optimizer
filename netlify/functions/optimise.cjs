@@ -56,16 +56,16 @@ exports.handler = async (event) => {
                 throw new Error('Could not determine image format');
             }
 
-            // First pass with quality 85
+            // First pass with quality 70
             const avifBuffer1 = await sharp(inputBuffer)
                 .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-                .avif({ quality: 85 })
+                .avif({ quality: 70, effort: 6 })
                 .toBuffer();
 
             const reduction = 1 - (avifBuffer1.length / inputBuffer.length);
             console.log(`First pass reduction: ${(reduction * 100).toFixed(1)}%`);
 
-            if (reduction >= 0.5) {
+            if (reduction >= 0.6 || avifBuffer1.length < 75 * 1024) {
                 return {
                     statusCode: 200,
                     headers: { 'Content-Type': 'image/avif' },
@@ -74,13 +74,20 @@ exports.handler = async (event) => {
                 };
             }
 
-            // Second pass with adjusted quality
-            const adjustedQuality = Math.max(40, Math.round(40 + 40 * reduction));
+            // Calculate quality for second pass (40-65 based on reduction)
+            const minQuality = 40;
+            const maxQuality = 65;
+            const qualityRange = maxQuality - minQuality;
+
+            // Scale quality based on reduction (0% reduction = minQuality, 60% reduction = maxQuality)
+            const qualityScale = Math.min(1, reduction / 0.6);
+            const adjustedQuality = Math.round(minQuality + (qualityRange * qualityScale));
+
             console.log(`Second pass with quality: ${adjustedQuality}`);
-            
+
             const avifBuffer2 = await sharp(inputBuffer)
                 .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-                .avif({ quality: adjustedQuality })
+                .avif({ quality: adjustedQuality, effort: 6 })
                 .toBuffer();
 
             return {
