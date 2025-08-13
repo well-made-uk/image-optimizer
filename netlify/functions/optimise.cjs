@@ -1,6 +1,17 @@
 // netlify/functions/convert-to-avif.js
 const sharp = require('sharp');
 
+// Helper function to log memory usage
+function logMemoryUsage(stage) {
+    const used = process.memoryUsage();
+    console.log(`Memory at ${stage}:`, {
+        rss: `${Math.round(used.rss / 1024 / 1024 * 100) / 100} MB`,
+        heapTotal: `${Math.round(used.heapTotal / 1024 / 1024 * 100) / 100} MB`,
+        heapUsed: `${Math.round(used.heapUsed / 1024 / 1024 * 100) / 100} MB`,
+        external: `${Math.round(used.external / 1024 / 1024 * 100) / 100} MB`
+    });
+}
+
 exports.handler = async (event) => {
     console.log('Received request:', {
         method: event.httpMethod,
@@ -8,11 +19,23 @@ exports.handler = async (event) => {
         bodyLength: event.body?.length,
         isBase64Encoded: event.isBase64Encoded
     });
+    logMemoryUsage('start');
 
     if (event.httpMethod !== 'POST') {
         return {
             statusCode: 405,
             body: JSON.stringify({ error: 'Method Not Allowed' }),
+        };
+    }
+
+    // Validate content length (10MB max)
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    const contentLength = parseInt(event.headers['content-length'] || '0');
+    if (contentLength > MAX_SIZE) {
+        console.error(`Request too large: ${contentLength} bytes`);
+        return {
+            statusCode: 413,
+            body: JSON.stringify({ error: `File too large. Maximum size is ${MAX_SIZE / 1024 / 1024}MB` })
         };
     }
 
@@ -29,12 +52,14 @@ exports.handler = async (event) => {
             if (event.isBase64Encoded) {
                 inputBuffer = Buffer.from(event.body, 'base64');
             } else {
-                // For binary data, create a buffer directly
                 inputBuffer = Buffer.from(event.body, 'binary');
             }
             
-            if (inputBuffer.length === 0) throw new Error('Empty buffer');
+            if (inputBuffer.length === 0) {
+                throw new Error('Empty buffer received');
+            }
             console.log(`Received image data: ${inputBuffer.length} bytes`);
+            logMemoryUsage('after buffer creation');
             
         } catch (bufferError) {
             console.error('Error creating buffer:', bufferError);
@@ -47,74 +72,130 @@ exports.handler = async (event) => {
             };
         }
 
-        // Process image
-        try {
-            const metadata = await sharp(inputBuffer).metadata();
-            console.log('Image metadata:', metadata);
+        // Process image with timeout
+        const processWithTimeout = async () => {
+            const timeout = 9000; // 9 seconds (leaving 1s for response)
+            let timeoutId;
+            
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new Error(`Processing timed out after ${timeout}ms`));
+                }, timeout);
+            });
 
-            if (!metadata || !metadata.format) {
-                throw new Error('Could not determine image format');
-            }
+            try {
+                const metadata = await Promise.race([
+                    sharp(inputBuffer).metadata(),
+                    timeoutPromise
+                ]);
+                
+                clearTimeout(timeoutId);
+                console.log('Image metadata:', {
+                    format: metadata.format,
+                    width: metadata.width,
+                    height: metadata.height,
+                    size: metadata.size ? `${Math.round(metadata.size / 1024)}KB` : 'unknown'
+                });
+                logMemoryUsage('after metadata');
 
-            // First pass with quality 70
-            const avifBuffer1 = await sharp(inputBuffer)
-                .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-                .avif({ quality: 70, effort: 6 })
-                .toBuffer();
+                if (!metadata || !metadata.format) {
+                    throw new Error('Could not determine image format');
+                }
 
-            const reduction = 1 - (avifBuffer1.length / inputBuffer.length);
-            console.log(`First pass reduction: ${(reduction * 100).toFixed(1)}%`);
+                // First pass with quality 70
+                const avifBuffer1 = await Promise.race([
+                    sharp(inputBuffer, { failOnError: true })
+                        .resize(2000, 2000, { 
+                            fit: 'inside', 
+                            withoutEnlargement: true 
+                        })
+                        .avif({ 
+                            quality: 70, 
+                            effort: 6 
+                        })
+                        .toBuffer(),
+                    timeoutPromise
+                ]);
 
-            if (reduction >= 0.6 || avifBuffer1.length < 75 * 1024) {
+                const reduction = 1 - (avifBuffer1.length / inputBuffer.length);
+                console.log(`First pass reduction: ${(reduction * 100).toFixed(1)}%`);
+                logMemoryUsage('after first pass');
+
+                if (reduction >= 0.6 || avifBuffer1.length < 75 * 1024) {
+                    return {
+                        statusCode: 200,
+                        headers: { 
+                            'Content-Type': 'image/avif',
+                            'X-Image-Processed': 'single-pass',
+                            'X-Original-Size': inputBuffer.length,
+                            'X-Optimized-Size': avifBuffer1.length,
+                            'X-Reduction': `${(reduction * 100).toFixed(1)}%`
+                        },
+                        isBase64Encoded: true,
+                        body: avifBuffer1.toString('base64'),
+                    };
+                }
+
+                // Calculate quality for second pass (40-65 based on reduction)
+                const minQuality = 40;
+                const maxQuality = 65;
+                const qualityRange = maxQuality - minQuality;
+                const qualityScale = Math.min(1, reduction / 0.6);
+                const adjustedQuality = Math.round(minQuality + (qualityRange * qualityScale));
+
+                console.log(`Second pass with quality: ${adjustedQuality}`);
+
+                const avifBuffer2 = await Promise.race([
+                    sharp(inputBuffer, { failOnError: true })
+                        .resize(2000, 2000, { 
+                            fit: 'inside', 
+                            withoutEnlargement: true 
+                        })
+                        .avif({ 
+                            quality: adjustedQuality, 
+                            effort: 6 
+                        })
+                        .toBuffer(),
+                    timeoutPromise
+                ]);
+
+                logMemoryUsage('after second pass');
+
                 return {
                     statusCode: 200,
-                    headers: { 'Content-Type': 'image/avif' },
+                    headers: { 
+                        'Content-Type': 'image/avif',
+                        'X-Image-Processed': 'two-pass',
+                        'X-Original-Size': inputBuffer.length,
+                        'X-Optimized-Size': avifBuffer2.length,
+                        'X-Reduction': `${((1 - (avifBuffer2.length / inputBuffer.length)) * 100).toFixed(1)}%`
+                    },
                     isBase64Encoded: true,
-                    body: avifBuffer1.toString('base64'),
+                    body: avifBuffer2.toString('base64'),
                 };
+
+            } catch (err) {
+                clearTimeout(timeoutId);
+                throw err;
             }
+        };
 
-            // Calculate quality for second pass (40-65 based on reduction)
-            const minQuality = 40;
-            const maxQuality = 65;
-            const qualityRange = maxQuality - minQuality;
-
-            // Scale quality based on reduction (0% reduction = minQuality, 60% reduction = maxQuality)
-            const qualityScale = Math.min(1, reduction / 0.6);
-            const adjustedQuality = Math.round(minQuality + (qualityRange * qualityScale));
-
-            console.log(`Second pass with quality: ${adjustedQuality}`);
-
-            const avifBuffer2 = await sharp(inputBuffer)
-                .resize(2000, 2000, { fit: 'inside', withoutEnlargement: true })
-                .avif({ quality: adjustedQuality, effort: 6 })
-                .toBuffer();
-
-            return {
-                statusCode: 200,
-                headers: { 'Content-Type': 'image/avif' },
-                isBase64Encoded: true,
-                body: avifBuffer2.toString('base64'),
-            };
-
-        } catch (processError) {
-            console.error('Image processing error:', processError);
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ 
-                    error: 'Failed to process image',
-                    details: processError.message 
-                })
-            };
-        }
+        return await processWithTimeout();
 
     } catch (error) {
-        console.error('Unexpected error:', error);
+        console.error('Error processing image:', {
+            error: error.message,
+            stack: error.stack,
+            name: error.name
+        });
+        logMemoryUsage('on error');
+
         return {
-            statusCode: 500,
-            body: JSON.stringify({ 
-                error: 'Internal server error',
-                details: error.message 
+            statusCode: error.statusCode || 500,
+            body: JSON.stringify({
+                error: 'Failed to process image',
+                details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
+                code: error.code
             })
         };
     }
