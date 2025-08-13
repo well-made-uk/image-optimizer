@@ -102,18 +102,33 @@ exports.handler = async (event) => {
                     throw new Error('Could not determine image format');
                 }
 
-                // First pass with quality 70
+                // Inside the processWithTimeout function, right before the first AVIF conversion:
+                console.log('Starting first AVIF conversion...');
                 const avifBuffer1 = await Promise.race([
-                    sharp(inputBuffer, { failOnError: true })
-                        .resize(2000, 2000, { 
-                            fit: 'inside', 
-                            withoutEnlargement: true 
-                        })
-                        .avif({ 
-                            quality: 70, 
-                            effort: 6 
-                        })
-                        .toBuffer(),
+                    (async () => {
+                        try {
+                            const startTime = Date.now();
+                            const result = await sharp(inputBuffer, {
+                                failOnError: true,
+                                limitInputPixels: 2000 * 2000 // Limit to 4MP to prevent processing very large images
+                            })
+                                .resize(2000, 2000, {
+                                    fit: 'inside',
+                                    withoutEnlargement: true
+                                })
+                                .avif({
+                                    quality: 70,
+                                    effort: 4, // Reduced from 6 to speed up processing
+                                    chromaSubsampling: '4:2:0' // Better compression
+                                })
+                                .toBuffer();
+                            console.log(`First AVIF conversion took ${Date.now() - startTime}ms`);
+                            return result;
+                        } catch (e) {
+                            console.error('First AVIF conversion failed:', e);
+                            throw e;
+                        }
+                    })(),
                     timeoutPromise
                 ]);
 
