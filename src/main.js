@@ -1,4 +1,5 @@
 import './style.css';
+import { ImagePool } from '@squoosh/lib';
 
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('file-input');
@@ -6,6 +7,58 @@ const tableBody = document.querySelector('#results-table tbody');
 const downloadAllBtn = document.getElementById('download-all');
 
 let processedFiles = [];
+
+async function optimizeImageClientSide(blob, firstPassQuality = 70, secondPassMinQuality = 40, secondPassMaxQuality = 65) {
+    const imagePool = new ImagePool();
+    const image = imagePool.ingestImage(blob);
+
+    // First pass with higher quality
+    await image.encode({
+        avif: {
+            quality: firstPassQuality,
+            cqLevel: Math.round(63 - (firstPassQuality * 0.6)),
+            chromaDeltaQ: false,
+            sharpness: 0,
+            subsample: 1,
+            speed: 4,
+        },
+    });
+
+    const firstPassResult = await image.encodedWith.avif;
+    const firstPassBlob = new Blob([firstPassResult.binary.buffer], { type: 'image/avif' });
+    
+    // Check if first pass is sufficient
+    const reduction = 1 - (firstPassBlob.size / blob.size);
+    if (reduction >= 0.6 || firstPassBlob.size < 75 * 1024) {
+        await imagePool.close();
+        return firstPassBlob;
+    }
+
+    // Calculate quality for second pass
+    const qualityScale = Math.min(1, reduction / 0.6);
+    const adjustedQuality = Math.round(
+        secondPassMinQuality + 
+        ((secondPassMaxQuality - secondPassMinQuality) * qualityScale)
+    );
+
+    // Second pass with adjusted quality
+    await image.encode({
+        avif: {
+            quality: adjustedQuality,
+            cqLevel: Math.round(63 - (adjustedQuality * 0.6)),
+            chromaDeltaQ: false,
+            sharpness: 0,
+            subsample: 1,
+            speed: 6,
+        },
+    });
+
+    const secondPassResult = await image.encodedWith.avif;
+    const secondPassBlob = new Blob([secondPassResult.binary.buffer], { type: 'image/avif' });
+    
+    await imagePool.close();
+    return secondPassBlob;
+}
 
 fileInput.addEventListener('change', e => {
     console.log('Files selected via input:', e.target.files);
@@ -88,31 +141,18 @@ async function processFile(file, row) {
         // Process image through canvas
         const { blob: processedBlob } = await processImageThroughCanvas(imageBlob);
         
-        // Convert to ArrayBuffer for binary transfer
-        const arrayBuffer = await processedBlob.arrayBuffer();
-        
-        // Call Netlify function with binary data
-        const response = await fetch('/.netlify/functions/optimise', {
-            method: 'POST',
-            body: arrayBuffer,
-            headers: {
-                'Content-Type': 'application/octet-stream'
-            }
-        });
-
-        if (!response.ok) throw new Error('API request failed');
-        
-        const resultBlob = await response.blob();
+        // Use client-side optimization
+        const optimizedBlob = await optimizeImageClientSide(processedBlob);
         const finalFile = new File(
-            [resultBlob], 
+            [optimizedBlob],
             `x-${file.name.replace(/\.[^/.]+$/, '')}.avif`,
             { type: 'image/avif' }
         );
 
         // Update UI
-        const reducedPercent = ((1 - (resultBlob.size / file.size)) * 100).toFixed(0);
+        const reducedPercent = ((1 - (optimizedBlob.size / file.size)) * 100).toFixed(0);
         row.querySelector('.opt-size').textContent = 
-            `${formatBytes(resultBlob.size)} (${reducedPercent}%)`;
+            `${formatBytes(optimizedBlob.size)} (${reducedPercent}%)`;
 
         const link = document.createElement('a');
         link.textContent = 'Download';
